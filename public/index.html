@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>네이버 예약 도우미</title>
+    <meta name="theme-color" content="#03c75a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="예약 도우미">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <script>
+      if (window.location.protocol === "file:") {
+        window.location.replace("http://127.0.0.1:4177/");
+      }
+    </script>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="rail" aria-label="예약 단계">
+        <div class="brand-mark" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <ol class="steps">
+          <li class="is-active">
+            <b>1</b>
+            <span>조건 입력</span>
+          </li>
+          <li>
+            <b>2</b>
+            <span>후보 확인</span>
+          </li>
+          <li>
+            <b>3</b>
+            <span>예약 이동</span>
+          </li>
+          <li>
+            <b>4</b>
+            <span>최종 확인</span>
+          </li>
+        </ol>
+      </aside>
+
+      <main>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Semi-auto reservation assistant</p>
+            <h1>네이버 예약 도우미</h1>
+          </div>
+          <div class="mode-pill">
+            <span class="pulse"></span>
+            사용자 확인형
+          </div>
+          <button class="install-button is-hidden" type="button" id="installAppButton" aria-label="앱 설치">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/></svg>
+            앱 설치
+          </button>
+        </header>
+
+        <section class="planner" aria-labelledby="planner-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="planner-title">예약 조건</h2>
+              <p>장소, 시간, 인원, 메뉴 카테고리로 후보를 찾고 예약 화면으로 넘깁니다.</p>
+            </div>
+            <button class="ghost-button" type="button" id="fillDemoButton">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v18m9-9H3"/></svg>
+              데모 입력
+            </button>
+          </div>
+
+          <form id="reservationForm" class="form-grid">
+            <label class="location-field">
+              <span>장소</span>
+              <input id="locationInput" name="location" type="text" autocomplete="off" placeholder="예: 성수역, 강남역, 광화문역">
+            </label>
+
+            <label class="restaurant-name-field">
+              <span>식당명 <small>선택</small></span>
+              <input id="restaurantNameInput" name="restaurantName" type="text" autocomplete="off" placeholder="예: 광화문미진, 우래옥">
+            </label>
+
+            <label>
+              <span>날짜</span>
+              <input id="dateInput" name="date" type="date">
+            </label>
+
+            <label>
+              <span>시간</span>
+              <input id="timeInput" name="time" type="time" value="19:00">
+            </label>
+
+            <label>
+              <span>인원</span>
+              <input id="peopleInput" name="people" type="number" min="1" max="20" value="2">
+            </label>
+
+            <fieldset class="category-field">
+              <legend>메뉴 카테고리</legend>
+              <div class="segmented" role="radiogroup" aria-label="메뉴 카테고리">
+                <label>
+                  <input type="radio" name="category" value="korean" checked>
+                  <span>한식</span>
+                </label>
+                <label>
+                  <input type="radio" name="category" value="japanese">
+                  <span>일식</span>
+                </label>
+                <label>
+                  <input type="radio" name="category" value="chinese">
+                  <span>중식</span>
+                </label>
+                <label>
+                  <input type="radio" name="category" value="western">
+                  <span>양식</span>
+                </label>
+                <label>
+                  <input type="radio" name="category" value="other">
+                  <span>기타</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="alcohol-field">
+              <legend>술과 함께?</legend>
+              <div class="segmented alcohol-segmented" role="radiogroup" aria-label="술과 함께 여부">
+                <label>
+                  <input type="radio" name="alcoholMode" value="meal" checked>
+                  <span>식사 중심</span>
+                </label>
+                <label>
+                  <input type="radio" name="alcoholMode" value="drinks">
+                  <span>술과 함께</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset class="drink-type-field is-hidden" id="drinkTypeField" aria-hidden="true">
+              <legend>주종</legend>
+              <div class="segmented drink-type-segmented" role="radiogroup" aria-label="주종">
+                <label>
+                  <input type="radio" name="drinkType" value="soju" checked disabled>
+                  <span>소주</span>
+                </label>
+                <label>
+                  <input type="radio" name="drinkType" value="beer" disabled>
+                  <span>맥주</span>
+                </label>
+                <label>
+                  <input type="radio" name="drinkType" value="somaek" disabled>
+                  <span>소맥</span>
+                </label>
+                <label>
+                  <input type="radio" name="drinkType" value="wine" disabled>
+                  <span>와인</span>
+                </label>
+                <label>
+                  <input type="radio" name="drinkType" value="kaoliang" disabled>
+                  <span>고량주</span>
+                </label>
+              </div>
+            </fieldset>
+
+            <label class="custom-menu-field is-hidden" id="customMenuField" aria-hidden="true">
+              <span>세부 메뉴</span>
+              <input id="customMenuInput" name="customMenu" type="text" autocomplete="off" placeholder="예: 태국음식, 베트남쌀국수, 샤브샤브">
+            </label>
+
+            <button class="primary-button" type="submit">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-5.2-5.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"/></svg>
+              후보 검색
+            </button>
+          </form>
+
+          <div class="recommendation-box" aria-live="polite">
+            <strong id="recommendationTitle">추천 음식</strong>
+            <span id="recommendationDetail">식사 중심으로 보기 좋은 메뉴를 추천합니다.</span>
+          </div>
+
+          <div class="recent-searches is-hidden" id="recentSearches">
+            <div class="recent-heading">
+              <strong>최근 검색</strong>
+              <button class="text-button compact-text-button" type="button" id="clearRecentButton">지우기</button>
+            </div>
+            <div class="recent-list" id="recentSearchList"></div>
+          </div>
+        </section>
+
+        <section class="status-band" aria-live="polite">
+          <div>
+            <strong id="statusTitle">준비됨</strong>
+            <span id="statusDetail">조건을 입력하면 식당 후보와 예약 링크를 준비합니다.</span>
+          </div>
+          <button class="text-button" type="button" id="copyPlanButton">예약 메모 복사</button>
+        </section>
+
+        <section class="settings-panel is-hidden" id="settingsPanel" aria-labelledby="settings-title" aria-hidden="true">
+          <div class="section-heading compact">
+            <div>
+              <h2 id="settings-title">API 키</h2>
+              <p id="settingsStatus">저장된 키를 확인 중입니다.</p>
+            </div>
+            <a class="text-link" href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener noreferrer">네이버 키 받기</a>
+          </div>
+
+          <form id="apiSettingsForm" class="settings-grid">
+            <label>
+              <span>NAVER_CLIENT_ID</span>
+              <input id="naverClientIdInput" name="NAVER_CLIENT_ID" type="password" autocomplete="off" placeholder="Client ID 붙여넣기">
+            </label>
+
+            <label>
+              <span>NAVER_CLIENT_SECRET</span>
+              <input id="naverClientSecretInput" name="NAVER_CLIENT_SECRET" type="password" autocomplete="off" placeholder="Client Secret 붙여넣기">
+            </label>
+
+            <label>
+              <span>KAKAO_REST_API_KEY <small>선택</small></span>
+              <input id="kakaoRestApiKeyInput" name="KAKAO_REST_API_KEY" type="password" autocomplete="off" placeholder="카카오 REST API 키">
+            </label>
+
+            <button class="secondary-button" type="submit">
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>
+              키 저장
+            </button>
+          </form>
+        </section>
+
+        <section class="workspace">
+          <div class="results-panel">
+            <div class="section-heading compact">
+              <div>
+                <h2>후보 식당</h2>
+                <p id="resultMeta">검색 전입니다.</p>
+              </div>
+            </div>
+            <div id="results" class="results-empty">
+              <svg aria-hidden="true" viewBox="0 0 120 80">
+                <path d="M20 58c14-24 23-35 36-35 9 0 14 6 20 14 5 7 10 12 21 12" />
+                <circle cx="56" cy="23" r="6" />
+                <path d="M14 66h92" />
+              </svg>
+              <p>조건을 입력하면 실제 식당 후보 또는 검색 링크가 여기에 표시됩니다.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="mobile-actionbar" aria-label="빠른 실행">
+      <button class="primary-button" type="button" id="mobileSearchButton">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-5.2-5.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z"/></svg>
+        후보 검색
+      </button>
+      <button class="icon-button" type="button" id="scrollTopButton" title="맨 위로" aria-label="맨 위로">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>
+      </button>
+    </div>
+
+    <template id="restaurantTemplate">
+      <article class="restaurant-card">
+        <div class="card-main">
+          <div class="card-title-row">
+            <h3></h3>
+          </div>
+          <p class="category"></p>
+          <p class="address"></p>
+          <p class="description"></p>
+        </div>
+        <div class="card-actions">
+          <button class="icon-button map-button" type="button" title="네이버 지도 열기" aria-label="네이버 지도 열기">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 18 3 21V6l6-3 6 3 6-3v15l-6 3-6-3Zm0 0V3m6 18V6"/></svg>
+          </button>
+          <button class="icon-text-button rating-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3Z"/></svg>
+            카카오 평점
+          </button>
+          <button class="icon-text-button booking-button" type="button">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 3v4M17 3v4M4.5 9.5h15M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm3 8h3m-3 3h6"/></svg>
+            예약 찾기
+          </button>
+        </div>
+      </article>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

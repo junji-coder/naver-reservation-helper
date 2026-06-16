@@ -1,0 +1,24 @@
+{
+  "name": "네이버 예약 도우미",
+  "short_name": "예약 도우미",
+  "description": "지하철역 근처 식당 후보를 찾고 네이버 예약과 카카오 평점 확인을 돕는 반자동 예약 도우미입니다.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f4",
+  "theme_color": "#03c75a",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
