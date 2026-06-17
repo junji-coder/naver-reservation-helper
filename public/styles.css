@@ -683,9 +683,23 @@ button:disabled {
 .card-title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   margin-bottom: 7px;
+}
+
+.rank-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid #b8dcc7;
+  border-radius: 999px;
+  background: #eef8f2;
+  color: var(--green-dark);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .category,
