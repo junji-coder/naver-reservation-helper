@@ -472,15 +472,18 @@ function renderResults(items, plan, payload = {}) {
     return;
   }
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const node = template.content.firstElementChild.cloneNode(true);
+    const rank = item.recommendationRank || index + 1;
+    const basis = item.recommendationBasis ? ` · ${item.recommendationBasis}` : "";
 
+    node.querySelector(".rank-badge").textContent = `추천 ${rank}위`;
     node.querySelector("h3").textContent = item.title;
     node.querySelector(".category").textContent = item.category || "카테고리 정보 없음";
     node.querySelector(".address").textContent = item.distanceText
       ? `${item.address || "주소 정보 없음"} · ${item.distanceText}`
       : item.address || "주소 정보 없음";
-    node.querySelector(".description").textContent = item.description || "네이버 예약 화면에서 세부 조건을 확인하세요.";
+    node.querySelector(".description").textContent = `${item.description || "네이버 예약 화면에서 세부 조건을 확인하세요."}${basis}`;
 
     node.querySelector(".map-button").addEventListener("click", () => {
       openInNewTab(item.naverMapUrl);
@@ -533,7 +536,7 @@ async function search(plan) {
     : payload.station
       ? ` · ${payload.station.label} 역명 기반`
     : "";
-  resultMeta.textContent = `${payload.query} · ${payload.items?.length || 0}개 후보${radiusMeta} · ${payload.source}`;
+  resultMeta.textContent = `${payload.query} · 추천순 ${payload.items?.length || 0}개 후보${radiusMeta} · ${payload.source}`;
 
   if (payload.warning) {
     setStatus(payload.needsApiKey ? "API 키 필요" : "검색 안내", payload.warning);
@@ -543,7 +546,7 @@ async function search(plan) {
       : payload.station
         ? `${payload.station.label} 역명 기반 결과입니다. `
         : "";
-    setStatus("후보 검색 완료", `${stationText}카드의 위험도를 확인한 뒤 카카오 평점이나 네이버 플레이스 예약 버튼을 확인하세요.`);
+    setStatus("추천순 정렬 완료", `${stationText}네이버 인기순과 거리 신호를 함께 반영해 추천 순위로 정렬했습니다.`);
   }
 
   return true;
