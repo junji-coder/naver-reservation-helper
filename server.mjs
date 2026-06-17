@@ -50,8 +50,12 @@ const drinkTypeLabels = {
 
 const configurableEnvKeys = ["NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET", "KAKAO_REST_API_KEY"];
 const stationRadiusMeters = 1000;
-const maxRestaurantResults = 15;
-const maxExpandedQueries = 6;
+const maxRestaurantResults = 36;
+const maxExpandedQueries = 18;
+const naverLocalDisplaySize = 5;
+const naverLocalPagesPerQuery = 2;
+const naverLocalSortModes = ["comment", "random"];
+const kakaoLocalDisplaySize = 15;
 const restaurantCacheTtlMs = 5 * 60 * 1000;
 const stationCache = new Map();
 const restaurantCache = new Map();
@@ -280,6 +284,74 @@ function dedupeItems(items) {
   return unique;
 }
 
+function scoreRestaurant(item, { menuLabel = "", alcoholMode = "meal", drinkType = "" } = {}) {
+  const sourceRank = Number.isFinite(item.sourceRank) ? item.sourceRank : maxRestaurantResults * 2;
+  const distance = Number.isFinite(item.distanceMeters) ? item.distanceMeters : stationRadiusMeters;
+  const haystack = cleanHtml(`${item.title} ${item.category} ${item.description}`).replace(/\s+/g, "");
+  const menuKeywords = getRelatedMenuKeywords(menuLabel);
+  const drinkLabel = getDrinkLabel(drinkType);
+  const drinkIntent = getDrinkSearchIntent(drinkType).replace(/\s+/g, "");
+  const menuMatch = menuKeywords.some((keyword) => {
+    const cleanedKeyword = cleanHtml(keyword).replace(/\s+/g, "");
+    return cleanedKeyword && haystack.includes(cleanedKeyword);
+  });
+  let score = 0;
+
+  score += Math.max(0, 140 - sourceRank * 4);
+  score += Math.max(0, 80 - distance / 12.5);
+
+  for (const keyword of menuKeywords) {
+    const cleanedKeyword = cleanHtml(keyword).replace(/\s+/g, "");
+    if (cleanedKeyword && haystack.includes(cleanedKeyword)) score += 12;
+  }
+
+  if (menuLabel && menuLabel !== "기타") {
+    score += menuMatch ? 28 : -60;
+  }
+
+  if (alcoholMode === "drinks") {
+    if (/술집|이자카야|주점|포차|바|펍|안주/.test(haystack)) score += 18;
+    if (drinkLabel && haystack.includes(drinkLabel.replace(/\s+/g, ""))) score += 10;
+    if (drinkIntent && haystack.includes(drinkIntent)) score += 8;
+  }
+
+  if (item.source === "naver") score += 10;
+  if (item.source === "kakao") score += 6;
+
+  return Math.round(score);
+}
+
+function sortByRecommendation(items, context = {}) {
+  return [...items]
+    .map((item) => {
+      const recommendationScore = scoreRestaurant(item, context);
+      return {
+        ...item,
+        recommendationScore,
+        recommendationBasis: item.source === "naver"
+          ? "네이버 인기순과 역 기준 거리"
+          : "역 기준 거리와 메뉴 적합도"
+      };
+    })
+    .sort((a, b) => {
+      if (b.recommendationScore !== a.recommendationScore) {
+        return b.recommendationScore - a.recommendationScore;
+      }
+
+      const distanceA = Number.isFinite(a.distanceMeters) ? a.distanceMeters : Number.POSITIVE_INFINITY;
+      const distanceB = Number.isFinite(b.distanceMeters) ? b.distanceMeters : Number.POSITIVE_INFINITY;
+      if (distanceA !== distanceB) return distanceA - distanceB;
+
+      const rankA = Number.isFinite(a.sourceRank) ? a.sourceRank : Number.POSITIVE_INFINITY;
+      const rankB = Number.isFinite(b.sourceRank) ? b.sourceRank : Number.POSITIVE_INFINITY;
+      return rankA - rankB;
+    })
+    .map((item, index) => ({
+      ...item,
+      recommendationRank: index + 1
+    }));
+}
+
 function getRestaurantCache(key) {
   const cached = restaurantCache.get(key);
   if (!cached) return null;
@@ -345,6 +417,11 @@ function buildExpandedQueries(stationLabel, menuLabel, alcoholMode, drinkType) {
       ]
     : [
         buildRestaurantQuery(stationLabel, menuLabel, alcoholMode),
+        `${stationLabel} 맛집`,
+        `${stationLabel} 식당`,
+        `${stationLabel} 밥집`,
+        `${stationLabel} 점심`,
+        `${stationLabel} 저녁`,
         ...keywords.flatMap((keyword) => [
           `${stationLabel} ${keyword} 맛집`,
           `${stationLabel} ${keyword} 식당`
@@ -377,7 +454,7 @@ function buildKakaoKeywordQueries(menuLabel, alcoholMode, drinkType) {
     .slice(0, maxExpandedQueries);
 }
 
-async function fetchNaverLocal(query, { display = 5, sort = "random" } = {}) {
+async function fetchNaverLocal(query, { display = 5, sort = "random", start = 1 } = {}) {
   const clientId = process.env.NAVER_CLIENT_ID;
   const clientSecret = process.env.NAVER_CLIENT_SECRET;
 
@@ -386,7 +463,7 @@ async function fetchNaverLocal(query, { display = 5, sort = "random" } = {}) {
   const apiUrl = new URL("https://openapi.naver.com/v1/search/local.json");
   apiUrl.searchParams.set("query", query);
   apiUrl.searchParams.set("display", String(display));
-  apiUrl.searchParams.set("start", "1");
+  apiUrl.searchParams.set("start", String(start));
   apiUrl.searchParams.set("sort", sort);
 
   const apiResponse = await fetch(apiUrl, {
@@ -496,7 +573,7 @@ function sortByDistance(items) {
   });
 }
 
-function normalizeNaverItem(item, location = "", center = null) {
+function normalizeNaverItem(item, location = "", center = null, metadata = {}) {
   const title = cleanHtml(item.title);
   const category = cleanHtml(item.category);
   const address = cleanHtml(item.roadAddress || item.address);
@@ -512,11 +589,12 @@ function normalizeNaverItem(item, location = "", center = null) {
     mapx: item.mapx || "",
     mapy: item.mapy || "",
     source: "naver",
+    ...metadata,
     ...buildSearchLinks(title, address, placeSearchHint, placeSearchHint)
   }, center, coords);
 }
 
-function normalizeKakaoItem(item, location = "", center = null) {
+function normalizeKakaoItem(item, location = "", center = null, metadata = {}) {
   const title = cleanHtml(item.place_name);
   const category = cleanHtml(item.category_name);
   const address = cleanHtml(item.road_address_name || item.address_name);
@@ -537,6 +615,7 @@ function normalizeKakaoItem(item, location = "", center = null) {
     mapx: item.x || "",
     mapy: item.y || "",
     source: "kakao",
+    ...metadata,
     ...buildSearchLinks(title, address, placeSearchHint, placeSearchHint),
     kakaoMapUrl: item.place_url || buildSearchLinks(title, address, placeSearchHint, placeSearchHint).kakaoMapUrl
   }, center, coords);
@@ -651,7 +730,7 @@ async function searchRestaurants(requestUrl) {
         const apiUrl = new URL("https://dapi.kakao.com/v2/local/search/keyword.json");
         apiUrl.searchParams.set("query", keyword);
         apiUrl.searchParams.set("category_group_code", "FD6");
-        apiUrl.searchParams.set("size", String(maxRestaurantResults));
+        apiUrl.searchParams.set("size", String(kakaoLocalDisplaySize));
         apiUrl.searchParams.set("sort", "distance");
         apiUrl.searchParams.set("x", String(stationCenter.lon));
         apiUrl.searchParams.set("y", String(stationCenter.lat));
@@ -668,9 +747,13 @@ async function searchRestaurants(requestUrl) {
 
         total += data.meta?.total_count || 0;
         if (Array.isArray(data.documents)) {
+          const baseRank = allItems.length;
           allItems.push(
             ...data.documents
-              .map((item) => normalizeKakaoItem(item, stationSearchLabel, stationCenter))
+              .map((item, index) => normalizeKakaoItem(item, stationSearchLabel, stationCenter, {
+                sourceRank: baseRank + index + 1,
+                sourceQuery: keyword
+              }))
               .filter((item) => isFoodCategory(item.category))
               .filter(withinStationRadius)
           );
@@ -679,8 +762,7 @@ async function searchRestaurants(requestUrl) {
         if (dedupeItems(allItems).length >= maxRestaurantResults) break;
       }
 
-      const items = dedupeItems(allItems)
-        .sort((a, b) => a.distanceMeters - b.distanceMeters)
+      const items = sortByRecommendation(dedupeItems(allItems), { menuLabel, alcoholMode, drinkType })
         .slice(0, maxRestaurantResults);
 
       if (items.length) {
@@ -728,29 +810,46 @@ async function searchRestaurants(requestUrl) {
     let total = 0;
     let lastError = null;
 
-    for (const expandedQuery of buildExpandedQueries(stationSearchLabel, menuLabel, alcoholMode, drinkType)) {
-      let data = null;
-      try {
-        data = await fetchNaverLocal(expandedQuery, { display: 5, sort: "comment" });
-      } catch (error) {
-        lastError = error;
-        continue;
-      }
+    for (const sortMode of naverLocalSortModes) {
+      for (const expandedQuery of buildExpandedQueries(stationSearchLabel, menuLabel, alcoholMode, drinkType)) {
+        for (let page = 0; page < naverLocalPagesPerQuery; page += 1) {
+          const start = page * naverLocalDisplaySize + 1;
+          let data = null;
+          try {
+            data = await fetchNaverLocal(expandedQuery, { display: naverLocalDisplaySize, sort: sortMode, start });
+          } catch (error) {
+            lastError = error;
+            break;
+          }
 
-      total += data?.total || 0;
+          if (sortMode === "comment" && page === 0) total += data?.total || 0;
 
-      if (Array.isArray(data?.items)) {
-        allItems.push(
-          ...data.items
-            .map((item) => normalizeNaverItem(item, stationSearchLabel, stationCenter))
-            .filter((item) => isFoodCategory(item.category))
-        );
+          if (Array.isArray(data?.items)) {
+            const baseRank = allItems.length;
+            allItems.push(
+              ...data.items
+                .map((item, index) => normalizeNaverItem(item, stationSearchLabel, stationCenter, {
+                  sourceRank: baseRank + index + 1,
+                  sourceQuery: expandedQuery,
+                  sourceSort: sortMode
+                }))
+                .filter((item) => isFoodCategory(item.category))
+            );
+          }
+
+          if (dedupeItems(allItems).length >= maxRestaurantResults) break;
+        }
+
+        if (dedupeItems(allItems).length >= maxRestaurantResults) break;
       }
 
       if (dedupeItems(allItems).length >= maxRestaurantResults) break;
     }
 
-    const items = sortByDistance(applyStationRadiusFilter(dedupeItems(allItems), hasStationCoordinates))
+    const items = sortByRecommendation(
+      applyStationRadiusFilter(dedupeItems(allItems), hasStationCoordinates),
+      { menuLabel, alcoholMode, drinkType }
+    )
       .slice(0, maxRestaurantResults);
 
     if (!items.length && lastError) {
