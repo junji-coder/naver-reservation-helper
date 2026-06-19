@@ -417,7 +417,7 @@ function openInNewTab(url) {
 function handleBookingOpen(item) {
   setSelectedRestaurant(item);
   openInNewTab(item.bookingSearchUrl);
-  setStatus("네이버 플레이스 열림", "새 탭의 네이버 플레이스에서 예약 버튼을 확인하세요.");
+  setStatus("네이버 예약 열림", `${item.title} 예약 링크를 새 탭에서 열었습니다.`);
 }
 
 function renderEmptyState(message, payload = {}) {
@@ -465,9 +465,13 @@ function renderResults(items, plan, payload = {}) {
   results.innerHTML = "";
 
   if (!items.length) {
-    const message = payload.needsApiKey
-      ? "현재 API 키가 없어 실제 식당명을 앱 안에 표시하지 않습니다."
-      : "검색 결과가 없습니다. 장소나 카테고리를 조금 넓혀 보세요.";
+    let message = "검색 결과가 없습니다. 장소나 카테고리를 조금 넓혀 보세요.";
+    if (payload.needsApiKey) {
+      message = "현재 API 키가 없어 실제 식당명을 앱 안에 표시하지 않습니다.";
+    } else if (payload.reservationOnly) {
+      message = "확인된 네이버 예약 링크가 있는 식당을 찾지 못했습니다. 장소나 카테고리를 조금 넓혀 보세요.";
+    }
+
     renderEmptyState(message, payload);
     return;
   }
@@ -536,7 +540,8 @@ async function search(plan) {
     : payload.station
       ? ` · ${payload.station.label} 역명 기반`
     : "";
-  resultMeta.textContent = `${payload.query} · 추천순 ${payload.items?.length || 0}개 후보${radiusMeta} · ${payload.source}`;
+  const reservationMeta = payload.reservationOnly ? " · 네이버 예약 링크 확인" : "";
+  resultMeta.textContent = `${payload.query} · 추천순 ${payload.items?.length || 0}개 후보${radiusMeta}${reservationMeta} · ${payload.source}`;
 
   if (payload.warning) {
     setStatus(payload.needsApiKey ? "API 키 필요" : "검색 안내", payload.warning);
@@ -546,7 +551,7 @@ async function search(plan) {
       : payload.station
         ? `${payload.station.label} 역명 기반 결과입니다. `
         : "";
-    setStatus("추천순 정렬 완료", `${stationText}네이버 인기순과 거리 신호를 함께 반영해 추천 순위로 정렬했습니다.`);
+    setStatus("예약 링크 확인 완료", `${stationText}네이버 예약 링크가 확인된 후보만 추천 순위로 정렬했습니다.`);
   }
 
   return true;
