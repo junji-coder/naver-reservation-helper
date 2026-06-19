@@ -56,9 +56,14 @@ const naverLocalDisplaySize = 5;
 const naverLocalPagesPerQuery = 2;
 const naverLocalSortModes = ["comment", "random"];
 const kakaoLocalDisplaySize = 15;
+const maxReservationCheckCandidates = 60;
+const naverReservationSearchDisplaySize = 10;
+const reservationSearchConcurrency = 4;
 const restaurantCacheTtlMs = 5 * 60 * 1000;
+const reservationLinkCacheTtlMs = 30 * 60 * 1000;
 const stationCache = new Map();
 const restaurantCache = new Map();
+const reservationLinkCache = new Map();
 
 function loadDotEnv(filePath) {
   if (!existsSync(filePath)) return;
@@ -481,6 +486,225 @@ async function fetchNaverLocal(query, { display = 5, sort = "random", start = 1 
   return data;
 }
 
+async function fetchNaverWebSearch(query, { display = 10, start = 1 } = {}) {
+  const clientId = process.env.NAVER_CLIENT_ID;
+  const clientSecret = process.env.NAVER_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) return null;
+
+  const apiUrl = new URL("https://openapi.naver.com/v1/search/webkr.json");
+  apiUrl.searchParams.set("query", query);
+  apiUrl.searchParams.set("display", String(display));
+  apiUrl.searchParams.set("start", String(start));
+
+  const apiResponse = await fetch(apiUrl, {
+    headers: {
+      "X-Naver-Client-Id": clientId,
+      "X-Naver-Client-Secret": clientSecret
+    }
+  });
+  const data = await apiResponse.json();
+
+  if (!apiResponse.ok) {
+    throw new Error(data.errorMessage || apiResponse.statusText);
+  }
+
+  return data;
+}
+
+function safeDecode(value = "") {
+  let decoded = String(value);
+
+  for (let index = 0; index < 3; index += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+
+  return decoded;
+}
+
+function normalizeNaverReservationUrl(rawUrl = "") {
+  let url = safeDecode(cleanHtml(rawUrl))
+    .replace(/&amp;/g, "&")
+    .trim()
+    .replace(/^[("'[]+/, "")
+    .replace(/[)"'\].,]+$/, "");
+
+  if (url.startsWith("//")) url = `https:${url}`;
+  if (/^(?:m\.)?booking\.naver\.com\//.test(url)) url = `https://${url}`;
+
+  try {
+    const parsed = new URL(url);
+    const allowedHosts = new Set(["booking.naver.com", "m.booking.naver.com"]);
+    if (!allowedHosts.has(parsed.hostname)) return "";
+    if (!/^\/booking\/\d+\/bizes\/\d+/.test(parsed.pathname)) return "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
+function extractNaverReservationUrls(...values) {
+  const text = values
+    .map((value) => safeDecode(cleanHtml(value)))
+    .join(" ");
+  const matches = text.match(/(?:https?:\/\/)?(?:m\.)?booking\.naver\.com\/booking\/\d+\/bizes\/\d+(?:\/items\/\d+)?(?:\?[^\s"'<>]*)?/g) || [];
+
+  return [...new Set(matches.map(normalizeNaverReservationUrl).filter(Boolean))];
+}
+
+function getReservationLinkCache(key) {
+  const cached = reservationLinkCache.get(key);
+  if (!cached) return undefined;
+
+  if (Date.now() - cached.createdAt > reservationLinkCacheTtlMs) {
+    reservationLinkCache.delete(key);
+    return undefined;
+  }
+
+  return cached.value;
+}
+
+function setReservationLinkCache(key, value) {
+  reservationLinkCache.set(key, {
+    createdAt: Date.now(),
+    value
+  });
+}
+
+function isInvalidNaverReservationPage(html = "", finalUrl = "") {
+  const text = cleanHtml(html);
+  return (
+    /운영하지 않는\s*예약 페이지/.test(text) ||
+    /error_wrapper|error\/bizes/.test(html) ||
+    /\/error(?:\?|$|\/)/.test(finalUrl)
+  );
+}
+
+async function validateNaverReservationUrl(url) {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0"
+      }
+    });
+    const html = await response.text();
+
+    if (!response.ok) return false;
+    if (isInvalidNaverReservationPage(html, response.url || url)) return false;
+    return /__LOADABLE_REQUIRED_CHUNKS__|Booking-Business|booking\/\d+\/bizes\//.test(html);
+  } catch {
+    return false;
+  }
+}
+
+function buildReservationSearchQueries(item, location = "") {
+  const title = cleanHtml(item.title);
+  const address = cleanHtml(item.address);
+  const place = cleanHtml(location);
+
+  return [...new Set([
+    `${title} ${address} m.booking.naver.com`,
+    `${title} ${place} m.booking.naver.com`,
+    `${title} ${place} 네이버 예약`,
+    `${title} 네이버예약`
+  ].map((query) => query.replace(/\s+/g, " ").trim()).filter(Boolean))];
+}
+
+async function findNaverReservationLink(item, { location = "" } = {}) {
+  const cacheKey = `${cleanHtml(item.title)}|${cleanHtml(item.address)}|${cleanHtml(location)}`;
+  const cached = getReservationLinkCache(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const directUrls = extractNaverReservationUrls(item.link, item.bookingSearchUrl, item.description);
+  for (const url of directUrls) {
+    if (await validateNaverReservationUrl(url)) {
+      const value = { url, sourceTitle: item.title, source: "direct" };
+      setReservationLinkCache(cacheKey, value);
+      return value;
+    }
+  }
+
+  for (const query of buildReservationSearchQueries(item, location)) {
+    let data = null;
+    try {
+      data = await fetchNaverWebSearch(query, { display: naverReservationSearchDisplaySize });
+    } catch {
+      continue;
+    }
+
+    const documents = Array.isArray(data?.items) ? data.items : [];
+
+    for (const [index, document] of documents.entries()) {
+      const urls = extractNaverReservationUrls(document.link, document.title, document.description);
+      for (const url of urls) {
+        if (await validateNaverReservationUrl(url)) {
+          const value = {
+            url,
+            sourceTitle: cleanHtml(document.title),
+            source: "webkr",
+            sourceRank: index + 1
+          };
+          setReservationLinkCache(cacheKey, value);
+          return value;
+        }
+      }
+    }
+  }
+
+  setReservationLinkCache(cacheKey, null);
+  return null;
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, items.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
+}
+
+async function keepOnlyItemsWithNaverReservations(items, context = {}) {
+  const candidates = items.slice(0, maxReservationCheckCandidates);
+  const checkedItems = await mapWithConcurrency(candidates, reservationSearchConcurrency, async (item) => {
+    const reservation = await findNaverReservationLink(item, context);
+    if (!reservation?.url) return null;
+
+    const description = item.description
+      ? `${item.description} · 네이버 예약 링크 확인`
+      : "네이버 예약 링크 확인";
+
+    return {
+      ...item,
+      description,
+      bookingSearchUrl: reservation.url,
+      hasNaverReservation: true,
+      reservationLinkSource: reservation.source,
+      reservationLinkSourceTitle: reservation.sourceTitle || ""
+    };
+  });
+
+  return sortByRecommendation(checkedItems.filter(Boolean), context)
+    .slice(0, maxRestaurantResults);
+}
+
 async function resolveStationCenter(location) {
   const stationName = normalizeStationName(location);
   if (!stationName) return null;
@@ -680,13 +904,25 @@ async function searchRestaurants(requestUrl) {
   }
 
   if (restaurantName) {
+    const manualItem = buildManualItem(location, restaurantName, menuLabel, alcoholMode, drinkType);
+    const items = await keepOnlyItemsWithNaverReservations([manualItem], {
+      location,
+      menuLabel,
+      alcoholMode,
+      drinkType
+    });
+
     return {
       status: 200,
       payload: {
         source: "manual",
         query,
-        total: 1,
-        items: [buildManualItem(location, restaurantName, menuLabel, alcoholMode, drinkType)]
+        total: items.length,
+        reservationOnly: true,
+        warning: items.length
+          ? ""
+          : "입력한 식당명으로 확인된 네이버 예약 링크를 찾지 못했습니다.",
+        items
       }
     };
   }
@@ -759,11 +995,16 @@ async function searchRestaurants(requestUrl) {
           );
         }
 
-        if (dedupeItems(allItems).length >= maxRestaurantResults) break;
+        if (dedupeItems(allItems).length >= maxReservationCheckCandidates) break;
       }
 
-      const items = sortByRecommendation(dedupeItems(allItems), { menuLabel, alcoholMode, drinkType })
-        .slice(0, maxRestaurantResults);
+      const candidates = sortByRecommendation(dedupeItems(allItems), { menuLabel, alcoholMode, drinkType });
+      const items = await keepOnlyItemsWithNaverReservations(candidates, {
+        location: stationSearchLabel,
+        menuLabel,
+        alcoholMode,
+        drinkType
+      });
 
       if (items.length) {
         const payload = {
@@ -772,6 +1013,8 @@ async function searchRestaurants(requestUrl) {
           station: stationCenter,
           radiusMeters: stationRadiusMeters,
           radiusApplied: true,
+          reservationOnly: true,
+          unfilteredCount: dedupeItems(allItems).length,
           total,
           items
         };
@@ -837,22 +1080,27 @@ async function searchRestaurants(requestUrl) {
             );
           }
 
-          if (dedupeItems(allItems).length >= maxRestaurantResults) break;
+          if (dedupeItems(allItems).length >= maxReservationCheckCandidates) break;
         }
 
-        if (dedupeItems(allItems).length >= maxRestaurantResults) break;
+        if (dedupeItems(allItems).length >= maxReservationCheckCandidates) break;
       }
 
-      if (dedupeItems(allItems).length >= maxRestaurantResults) break;
+      if (dedupeItems(allItems).length >= maxReservationCheckCandidates) break;
     }
 
-    const items = sortByRecommendation(
+    const candidates = sortByRecommendation(
       applyStationRadiusFilter(dedupeItems(allItems), hasStationCoordinates),
       { menuLabel, alcoholMode, drinkType }
-    )
-      .slice(0, maxRestaurantResults);
+    );
+    const items = await keepOnlyItemsWithNaverReservations(candidates, {
+      location: stationSearchLabel,
+      menuLabel,
+      alcoholMode,
+      drinkType
+    });
 
-    if (!items.length && lastError) {
+    if (!candidates.length && lastError) {
       throw lastError;
     }
 
@@ -862,7 +1110,11 @@ async function searchRestaurants(requestUrl) {
       station: stationCenter,
       radiusMeters: stationRadiusMeters,
       radiusApplied: hasStationCoordinates,
-      warning: radiusWarning,
+      reservationOnly: true,
+      unfilteredCount: candidates.length,
+      warning: items.length
+        ? radiusWarning
+        : "조건에 맞는 후보 중 확인된 네이버 예약 링크가 있는 식당을 찾지 못했습니다. 장소나 카테고리를 조금 넓혀 보세요.",
       total,
       items
     };
